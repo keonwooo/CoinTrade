@@ -1,0 +1,25 @@
+trade:
+  ticker: "KRW-BTC"          # 거래 코인
+  seed_krw: 1000000          # 모의거래 시드
+  parts: 20                  # 분할 횟수 (1/20)
+  drop_pct: 0.01             # 평단 대비 하락 추가매수(1%)
+  rise_pct: 0.03             # 평단 대비 상승 전량매도(3%)
+  min_order_krw: 5000        # 업비트 최소 주문액
+  cooldown_sec: 20.0         # 주문 후 쿨다운(초)
+  poll_sec: 1.0              # 내부 루프 주기(초) — 로그 빈도는 log_every_sec로 제어
+  log_every_sec: 5.0         # ✅ 5초마다 상태 로그 1회
+  paper_trade: true          # true=모의, false=실거래
+  log_dir: "logs"            # 로그 폴더 (기본 /logs)
+  ws_stale_fallback_sec: 3.0 # WS 수신 정지 시 REST로 대체 허용 지연(초)
+
+fear_greed:
+  enabled: true             # 사용 여부
+  mode: "daily"             # "daily" | "interval"
+  daily_kst_hour: 9         # 한국시간 매일 9시
+  interval_sec: 3600        # 조회 주기(초) - 1시간 = 3600
+  notify_kakao: true        # 카카오톡 알림 설정
+  notify_on_start: true     # 시작 즉시 1회 알림을 보낼지
+  log_file: "fg_index.log"  # 로그 파일명 (trade.log_dir 폴더 안에 생성)
+
+upbit:
+  reset_cooldown_sec: 600   # REST 호출 실패 시 다음 시도까지 대기 시간(초)
