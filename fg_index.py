@@ -8,10 +8,7 @@ from datetime import datetime, timedelta
 import requests
 
 # KST 타임존
-try:
-    from zoneinfo import ZoneInfo  # Py3.9+
-except ImportError:
-    from backports.zoneinfo import ZoneInfo  # Py3.8: pip install backports.zoneinfo
+from zoneinfo import ZoneInfo  # Py3.9+
 KST = ZoneInfo("Asia/Seoul")
 
 class FearGreedWorker:

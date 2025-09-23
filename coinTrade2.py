@@ -8,10 +8,7 @@ from datetime import datetime, time as dtime, timedelta
 from typing import Optional
 from fg_index import FearGreedWorker
 
-try:
-    from zoneinfo import ZoneInfo
-except ImportError:
-    from backports.zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo
 
 import yaml
 from dotenv import load_dotenv
