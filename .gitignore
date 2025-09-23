@@ -7,5 +7,5 @@ config/kakao.json
 # 로그 디렉토리 전체 제외
 logs/
 
-가상환경
+#가상환경
 venv/
