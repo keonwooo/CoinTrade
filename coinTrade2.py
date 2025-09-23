@@ -102,7 +102,7 @@ file_handler = TimedRotatingFileHandler(
 )
 file_handler.suffix = "%Y-%m-%d"
 
-# ✅ 포매터 (datefmt로 시간 형식 지정)
+# 포매터 (datefmt로 시간 형식 지정)
 fmt = "%(asctime)s | %(levelname)s | %(message)s"
 datefmt = "%Y-%m-%d %H:%M:%S"
 console_handler.setFormatter(logging.Formatter(fmt, datefmt))
@@ -111,7 +111,7 @@ file_handler.setFormatter(logging.Formatter(fmt, datefmt))
 logger.addHandler(console_handler)
 logger.addHandler(file_handler)
 
-# ✅ 매수/매도 전용 로그
+# 매수/매도 전용 로그
 action_logger = logging.getLogger("trade-action")
 action_logger.setLevel(logging.INFO)
 
@@ -211,6 +211,7 @@ def format_daily_summary(op_code: str, price: float, krw: float, coin: float, av
         f"포지션 OP: {op_code or '-'}\n"
         f"(기준: 한국시간 오전 9시)"
     )
+
 # ======================
 # 실행 상태 (영속)
 # ======================
