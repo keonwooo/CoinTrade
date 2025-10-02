@@ -212,6 +212,9 @@ def format_daily_summary(op_code: str, price: float, krw: float, coin: float, av
         f"(기준: 한국시간 오전 9시)"
     )
 
+def is_valid_price(p: float) -> bool:
+    #최소 1원 이상일때
+    return isinstance(p, (int, float)) and p >= 1.0
 # ======================
 # 실행 상태 (영속)
 # ======================
@@ -267,6 +270,10 @@ def get_krw_and_coin_balance(ticker: str) -> Tuple[float, float, float]:
 # 주문
 # ======================
 def buy_unit_krw_with_available(unit_krw: float, available_krw: float, price: float) -> bool:
+    if not is_valid_price(price):
+        log.warning("[TRADE] 매수 스킵: 유효하지 않은 가격 값 (price<=0)")
+        return False
+
     amt = math.floor(min(unit_krw, available_krw))
     if amt < CFG.min_order_krw:
         log.info(f"매수 스킵: 가용 KRW {available_krw:,.0f} < 최소주문액 {CFG.min_order_krw:,.0f}")
@@ -315,6 +322,10 @@ def buy_unit_krw_with_available(unit_krw: float, available_krw: float, price: fl
         return ok
 
 def sell_all_market(volume: float, price: float) -> bool:
+    if not is_valid_price(price):
+        log.warning("[TRADE] 매도 스킵: 유효하지 않은 가격 (price<=0)")
+        return False
+
     if volume <= 0:
         log.info("매도 스킵: 보유수량 0")
         return False
@@ -512,6 +523,11 @@ def main():
                 price = get_rest_price(CFG.ticker)
             else:
                 price = ps_price
+
+            if not is_valid_price(price):
+                log.warning("[시세] 유요한 금액이 아님")
+                time.sleep(CFG.poll_sec)
+                continue
 
             # (3) 잔고
             krw, coin_bal, avg = get_krw_and_coin_balance(CFG.ticker)
