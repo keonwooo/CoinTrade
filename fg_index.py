@@ -139,7 +139,7 @@ class FearGreedWorker:
                 return
 
             changed = self._is_changed(data)
-            should_notify = force_notify or changed
+            should_notify = True
 
             if changed:
                 self.write_log_line(data)
