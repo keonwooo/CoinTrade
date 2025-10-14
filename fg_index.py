@@ -225,12 +225,19 @@ class FearGreedWorker:
 
     # ---------- 출력 ----------
     def write_log_line(self, d: Dict[str, Any]):
+        CNN_FGI_CLASSES = ("Extreme Greed", "Extreme Fear", "Greed", "Fear", "Neutral")
+        CLASS_WIDTH = max(len(s) for s in CNN_FGI_CLASSES)  # 14
+
         ts_str = "-"
         if d.get("timestamp"):
             ts_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(int(d["timestamp"])))
+
+        cls_raw = d.get("classification", "")
+        cls = str(cls_raw)
+        
         line = (
             f"{time.strftime('%Y-%m-%d %H:%M:%S')} | value={d['value']} "
-            f"| class={d.get('classification','')} | ts={ts_str} "
+            f"| class={cls:<{CLASS_WIDTH}} | ts={ts_str} "
             f"| prev={d.get('previous_close','-')}\n"
         )
         with open(self.log_path, "a", encoding="utf-8") as f:
@@ -242,14 +249,14 @@ class FearGreedWorker:
         ts_str = "-"
         if d.get("timestamp"):
             ts_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(int(d["timestamp"])))
-        cls = d.get("classification", "")
+        cls_en = d.get("classification", "")
+        cls_kr = self.translate_classification_to_korean(cls_en)
         return (
             "[CNN Fear & Greed]\n"
-            f"지수: {d['value']}{f' ({cls})' if cls else ''}\n"
+            f"지수: {d['value']}{f' ({cls_kr}, ({cls_en}))' if cls_en else ''}\n"
             f"데이터시각: {ts_str}\n"
-            "출처: edition.cnn.com"
         )
-
+    
     # ---------- 유틸 ----------
     @staticmethod
     def _parse_ts(ts_val):
@@ -273,3 +280,17 @@ class FearGreedWorker:
             except Exception:
                 continue
         return None
+    
+    @staticmethod
+    def translate_classification_to_korean(cls: str) -> str:
+        mapping = {
+            "Extreme Fear": "극단적 공포",
+            "Fear": "공포",
+            "Neutral": "중립",
+            "Greed": "탐욕",
+            "Extreme Greed": "극단적 탐욕"
+        }
+
+        cls_norm = cls.strip().title() if isinstance(cls, str) else ""
+
+        return mapping.get(cls_norm, "-")
