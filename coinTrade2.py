@@ -7,6 +7,7 @@ from kakao_notify import send_kakao_text
 from datetime import datetime, time as dtime, timedelta
 from typing import Optional
 from fg_index import FearGreedWorker
+from wcwidth import wcswidth
 
 from zoneinfo import ZoneInfo
 
@@ -46,6 +47,7 @@ class Config:
     rise_pct: float
     min_order_krw: float
     cooldown_sec: float
+    max_buys_per_hour: int
     poll_sec: float
     log_every_sec: float
     paper_trade: bool
@@ -70,6 +72,7 @@ def load_config(path: str = CONFIG_FILE) -> Config:
         rise_pct=float(t.get("rise_pct", 0.03)),
         min_order_krw=float(t.get("min_order_krw", 5000)),
         cooldown_sec=float(t.get("cooldown_sec", 20.0)),
+        max_buys_per_hour=int(t.get("max_buys_per_hour", 3)),
         poll_sec=float(t.get("poll_sec", 1.0)),
         log_every_sec=float(t.get("log_every_sec", 5.0)),
         paper_trade=bool(t.get("paper_trade", True)),
@@ -215,6 +218,33 @@ def format_daily_summary(op_code: str, price: float, krw: float, coin: float, av
 def is_valid_price(p: float) -> bool:
     #최소 1원 이상일때
     return isinstance(p, (int, float)) and p >= 1.0
+
+# ==== 시간당 매수 제한 ====
+BUY_HISTORY = []  # 최근 1시간 내 매수 타임스탬프 리스트
+
+def can_buy_now() -> bool:
+    """최근 1시간 내 매수 횟수가 CFG.max_buys_per_hour를 초과했는지 검사"""
+    global BUY_HISTORY
+    now = time.time()
+    # 1시간(3600초) 내 기록만 유지
+    BUY_HISTORY = [t for t in BUY_HISTORY if now - t <= 3600]
+    if len(BUY_HISTORY) >= CFG.max_buys_per_hour:
+        log.info(f"[RISK] 최근 1시간 내 매수 {len(BUY_HISTORY)}회 → 제한 {CFG.max_buys_per_hour}회 초과, 이번 턴 스킵")
+        return False
+    return True
+
+def record_buy_time():
+    """매수 성공 직후에 호출해 매수 시간을 기록"""
+    global BUY_HISTORY
+    BUY_HISTORY.append(time.time())
+
+def pad_label(text: str, width: int) -> str:
+    """표시 폭 기준으로 라벨을 공백 패딩."""
+    w = wcswidth(text)
+    if w < 0:
+        w = len(text)
+    return text + " " * max(0, width - w)
+
 # ======================
 # 실행 상태 (영속)
 # ======================
@@ -394,6 +424,8 @@ def apply_runtime_safe_updates(old: Config, new: Config):
             old.min_order_krw = new.min_order_krw; updated.append("min_order_krw")
         if new.cooldown_sec != old.cooldown_sec:
             old.cooldown_sec = new.cooldown_sec; updated.append("cooldown_sec")
+        if new.max_buys_per_hour != old.max_buys_per_hour:
+            old.max_buys_per_hour = new.max_buys_per_hour; updated.append("max_buys_per_hour")
         if new.log_every_sec != old.log_every_sec:
             old.log_every_sec = new.log_every_sec; updated.append("log_every_sec")
         if new.ws_stale_fallback_sec != old.ws_stale_fallback_sec:
@@ -451,18 +483,26 @@ def main():
 
     # 설정 요약
     unit_krw = calc_unit_krw_by_initial_balance()
+    rows = [
+        ("거래 코인",        CFG.ticker),
+        ("시드머니",         f"{CFG.seed_krw:,.0f} KRW"),
+        ("분할 횟수",        f"{CFG.parts} (1회분량 ≈ {unit_krw:,.0f} KRW)"),
+        ("추가매수 트리거",   f"-{CFG.drop_pct*100:.2f}%"),
+        ("전량매도 트리거",   f"+{CFG.rise_pct*100:.2f}%"),
+        ("최소 주문액",       f"{CFG.min_order_krw:,.0f} KRW"),
+        ("쿨다운 시간",       f"{CFG.cooldown_sec} 초"),
+        ("시간당 매수 제한",   f"{CFG.max_buys_per_hour} 회"),
+        ("로그 주기",        f"{CFG.log_every_sec} 초"),
+        ("WS Fallback",      f"{CFG.ws_stale_fallback_sec} 초"),
+        ("모드",             ("모의거래" if CFG.paper_trade else "실거래")),
+        ("로그 폴더",        CFG.log_dir),
+    ]
+
+    label_width = max(wcswidth(k) for k, _ in rows)
+
     log.info("===== Bot Configuration (from config/config.yml) =====")
-    log.info(f"거래 코인     : {CFG.ticker}")
-    log.info(f"시드머니      : {CFG.seed_krw:,.0f} KRW")
-    log.info(f"분할 횟수     : {CFG.parts} (1회분량 ≈ {unit_krw:,.0f} KRW)")
-    log.info(f"추가매수 트리거 : -{CFG.drop_pct*100:.2f}%")
-    log.info(f"전량매도 트리거 : +{CFG.rise_pct*100:.2f}%")
-    log.info(f"최소 주문액   : {CFG.min_order_krw:,.0f} KRW")
-    log.info(f"쿨다운 시간   : {CFG.cooldown_sec} 초")
-    log.info(f"로그 주기     : {CFG.log_every_sec} 초")
-    log.info(f"WS Fallback   : {CFG.ws_stale_fallback_sec} 초")
-    log.info(f"모드          : {'모의거래' if CFG.paper_trade else '실거래'}")
-    log.info(f"로그 폴더     : {CFG.log_dir}")
+    for k, v in rows:
+        log.info(f"{pad_label(k, label_width)} : {v}")
     log.info("=====================================================")
 
     last_action_ts = 0.0
@@ -576,13 +616,19 @@ def main():
 
             # 1) 무포지션 → 초매수
             if not in_pos and coin_bal == 0:
+                if not can_buy_now():
+                    time.sleep(CFG.poll_sec); continue
                 if buy_unit_krw_with_available(unit_krw, krw, price):
+                    record_buy_time()
                     last_action_ts = time.time()
                 time.sleep(CFG.poll_sec); continue
 
             # 2) 평단 대비 하락 → 추가매수
             if avg > 0 and price <= avg * (1 - CFG.drop_pct):
+                if not can_buy_now():
+                    time.sleep(CFG.poll_sec); continue
                 if buy_unit_krw_with_available(unit_krw, krw, price):
+                    record_buy_time()
                     last_action_ts = time.time()
                 time.sleep(CFG.poll_sec); continue
 

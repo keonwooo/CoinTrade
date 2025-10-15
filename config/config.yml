@@ -6,6 +6,7 @@ trade:
   rise_pct: 0.03             # 평단 대비 상승 전량매도(3%)
   min_order_krw: 5000        # 업비트 최소 주문액
   cooldown_sec: 20.0         # 주문 후 쿨다운(초)
+  max_buys_per_hour: 3       # 1시간 내 최대 매수 횟수
   poll_sec: 1.0              # 내부 루프 주기(초) — 로그 빈도는 log_every_sec로 제어
   log_every_sec: 5.0         # 5초마다 상태 로그 1회
   paper_trade: true          # true=모의, false=실거래
