@@ -229,7 +229,7 @@ def can_buy_now() -> bool:
     # 1시간(3600초) 내 기록만 유지
     BUY_HISTORY = [t for t in BUY_HISTORY if now - t <= 3600]
     if len(BUY_HISTORY) >= CFG.max_buys_per_hour:
-        log.info(f"[RISK] 최근 1시간 내 매수 {len(BUY_HISTORY)}회 → 제한 {CFG.max_buys_per_hour}회 초과, 이번 턴 스킵")
+        #log.info(f"[RISK] 최근 1시간 내 매수 {len(BUY_HISTORY)}회 → 제한 {CFG.max_buys_per_hour}회 초과, 이번 턴 스킵")
         return False
     return True
 
