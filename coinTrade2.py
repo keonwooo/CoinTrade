@@ -149,6 +149,12 @@ if not CFG.paper_trade:
 # ======================
 # 공통 유틸
 # ======================
+def fmt_krw(v: float) -> str:
+    try:
+        return f"{float(v):,.0f} KRW"
+    except Exception:
+        return "-"
+
 def fmt_pct(price: float, avg: float) -> str:
     if avg and avg > 0:
         return f"{(price/avg - 1)*100:+.2f}%"
@@ -600,7 +606,9 @@ def main():
                 with state_lock:
                     op = state["op_code"] or "-"
                 if avg > 0:
-                    log.info(f"[{op}] 가격={price:,.0f} | 평단={avg:,.0f} | 등락률={fmt_pct(price, avg)}")
+                    pl_str = fmt_pct(price, avg)
+                    krw_str = fmt_krw(krw)
+                    log.info(f"[{op}] 가격={price:,.0f} | 평단={avg:,.0f} | 등락률={pl_str} | 잔고={krw_str}")
                 next_log_ts = now + CFG.log_every_sec
 
             # (6) 쿨다운
