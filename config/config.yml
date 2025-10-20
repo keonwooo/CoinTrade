@@ -23,27 +23,27 @@ fear_greed:
   log_file: "fg_index.log"  # 로그 파일명 (trade.log_dir 폴더 안에 생성)
 
 upbit:
-  reset_cooldown_sec: 600   # REST 호출 실패 시 다음 시도까지 대기 시간(초)
+  rest_cooldown_sec: 600   # REST 호출 실패 시 다음 시도까지 대기 시간(초)
 
 ## 변동성 기반
 volatility:
   enabled: true
-  window_sec: 300           # 최근 5분 간격으로 변동성 계산
-  ref_vol_pct: 0.5          # 기준 변동성(%) - 이 값과 비교해 스케일링
-  min_scale: 0.5            # 트리거 축소 하한 (너무 민감하지 않게)
-  max_scale: 2.0            # 트리거 확대 상한 (무한정 커지지 않게)
+  window_sec: 300             # 최근 5분 간격으로 변동성 계산
+  ref_vol_pct: 0.5            # 기준 변동성(%) - 이 값과 비교해 스케일링
+  min_scale: 0.5              # 트리거 축소 하한 (너무 민감하지 않게)
+  max_scale: 2.0              # 트리거 확대 상한 (무한정 커지지 않게)
 
 ## 거래량 급증 필터
 volume_spike:
   enabled: true
-  tf: "minute"              # 'minute' 고정(1분봉)
-  lookback: 20              # 과거 20봉 평균 대비
-  spike_multiplier: 3.0     # 평균의 3배 이상이면 급증으로 판단
-  cooldown_sec: 300         # 감지 시 매수 5분 중단
+  tf: "minute"                # 'minute' 고정(1분봉)
+  lookback: 20                # 과거 20봉 평균 대비
+  spike_multiplier: 3.0       # 평균의 3배 이상이면 급증으로 판단
+  cooldown_sec: 300           # 감지 시 매수 5분 중단
 
 ## RSI 필터
 rsi:
   enabled: true
-  period: 14                # RSI 기간
-  buy_below: 30.0           # RSI가 이 값 미만일 때만 추가매수 허용
-  use_close_1m: true        # 1분봉 증가 기준으로 계산(ws price로 같이 계산도 가능)
+  period: 14                  # RSI 기간
+  buy_below: 30.0             # RSI가 이 값 미만일 때만 추가매수 허용
+  use_close_1m: true          # 1분봉 증가 기준으로 계산(ws price로 같이 계산도 가능)
