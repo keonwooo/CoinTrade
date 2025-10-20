@@ -17,10 +17,6 @@ import pyupbit
 
 from price_source import PriceStream
 
-# for 변동성(표준편차) volatility
-from collections import deque
-import statistics
-
 # ======================
 # 경로 상수
 # ======================
@@ -95,31 +91,52 @@ CFG = load_config()
 BANNER = load_banner()
 
 # ======================
-# 변동성(표준편차) 추적
+# RSI 필터
 # ======================
-class VolatilityGuard:
-    def __init__(self, window_sec: int = 300):
-        self.window_sec = max(30, window_sec)
-        self.buf = deque()
+class RSIWatcher:
+    def __init__(self, ticker: str, period=14):
+        self.ticker = ticker
+        self.period = max(5, int(period))
+        self._last_min = None
+        self._rsi = None
     
-    def add(self, ts: float, price: float):
-        self.buf.append((ts, price))
-        while self.buf and ts - self.buf[0][0] > self.window_sec:
-            self.buf.popleft()
-
-    def realized_vol_pct(self) -> float:
-        # 가격 수준이 다른 구간에서도 비교 가능하게 '수익률' 표준편차 사용
-        if len(self.buf) < 10:
-            return 0.0
-        rets = []
-        prev = None
-        for _, p in self.buf:
-            if prev and p > 0 and prev > 0:
-                rets.append((p/prev - 1.0) * 100.0)
-            prev = p
-        if len(rets) < 5:
-            return 0.0
-        return statistics.pstdev(rets) # % 단위
+    def _fetch_close_1m(self):
+        try:
+            df = pyupbit.get_ohlcv(self.ticker, interval="minute1", count=max(200, self.period*3))
+        except Exception as e:
+            log.warning(f"[RSI] OHLCV 조회 실패: {e}")
+            return None
+        if df is None or len(df) < self.period + 1:
+            return None
+        return df['close'].astype(float).tolist()
+    
+    @staticmethod
+    def _calc_rsi(closes, period):
+        gains, losses = [], []
+        for i in range(1, len(closes)):
+            chg = closes[i] - closes[i-1]
+            gains.append(max(chg, 0.0))
+            losses.append(abs(min(chg, 0.0)))
+        import statistics
+        if len(gains) < period:
+            return None
+        avg_gain = statistics.mean(gains[-period:])
+        avg_loss = statistics.mean(losses[-period:])
+        if avg_loss == 0:
+            return 100.0
+        rs = avg_gain / avg_loss
+        return 100.0 - (100.0 / (1.0 + rs))
+    
+    def rsi(self):
+        now_min = int(time.time() // 60)
+        if self._last_min == now_min and self._rsi is not None:
+            return self._rsi
+        closes = self._fetch_close_1m()
+        if not closes:
+            return None
+        self._rsi = self._calc_rsi(closes, self.period)
+        self._last_min = now_min
+        return self._rsi
 
 # ======================
 # 로깅
@@ -594,14 +611,13 @@ def main():
                 maybe_reload_config(CONFIG_FILE)
                 next_cfg_check_ts = now + 5.0
 
-            vol_cfg = (doc.get("volatility") or {})
-            VOL_ENABLED = bool(vol_cfg.get("enabled"), False)
-            VOL_WINDOW = int(vol_cfg.get("window_sec", 300))
-            VOL_REF_PCT = float(vol_cfg.get("ref_vol_pct"), 0.5)
-            VOL_MIN_SCALE = float(vol_cfg.get("min_scale", 0.6))
-            VOL_MAX_SCALE = float(vol_cfg.get("max_scale", 2.0))
+            rsi_cfg = (doc.get("rsi") or {})
+            RSI_ENABLED = bool(rsi_cfg.get("enabled", False))
+            RSI_PERIOD = int(rsi_cfg.get("period", 14))
+            RSI_BUY_LIM = float(rsi_cfg.get("buy_below", 30.0))
 
-            vol_guard = VolatilityGuard(window_sec=VOL_WINDOW)
+            rsiw = RSIWatcher(CFG.ticker, period=RSI_PERIOD)
+
 
             # (2) 가격: WS 우선, 멈추면 REST
             ps_price = ps.get_last(CFG.ticker)
@@ -609,8 +625,6 @@ def main():
                 price = get_rest_price(CFG.ticker)
             else:
                 price = ps_price
-
-            vol_guard.add(now, price)
 
             if not is_valid_price(price):
                 log.warning("[시세] 유요한 금액이 아님")
@@ -663,18 +677,6 @@ def main():
 
             with state_lock:
                 in_pos = state["in_position"]
-            
-            drop_trig = CFG.drop_pct
-            rise_trig = CFG.rise_pct
-
-            if VOL_ENABLED:
-                vol_pct = vol_guard.realized_vol_pct()
-                scale = 1.0
-                if VOL_REF_PCT > 0:
-                    scale = vol_pct / VOL_REF_PCT
-                scale = max(VOL_MIN_SCALE, min(VOL_MAX_SCALE, scale))
-                drop_trig = CFG.drop_pct * scale
-                rise_trig = CFG.rise_pct * scale
 
             # 1) 무포지션 → 초매수
             if not in_pos and coin_bal == 0:
@@ -686,7 +688,15 @@ def main():
                 time.sleep(CFG.poll_sec); continue
 
             # 2) 평단 대비 하락 → 추가매수
-            if avg > 0 and price <= avg * (1 - drop_trig):
+            if avg > 0 and price <= avg * (1 - CFG.drop_pct):
+                if RSI_ENABLED:
+                    rv = rsiw.rsi()
+                    if rv is None:
+                        log.info("[RSI] 계산 불가 -> 이번 턴 매수 스킵")
+                        time.sleep(CFG.poll_sec); continue
+                    if rv >= RSI_BUY_LIM:
+                        log.info(f"[RSI] {rv:.2f} (>= {RSI_BUY_LIM}) -> 과매도 아님, 매수 스킵")
+                        time.sleep(CFG.poll_sec); continue
                 if not can_buy_now():
                     time.sleep(CFG.poll_sec); continue
                 if buy_unit_krw_with_available(unit_krw, krw, price):
@@ -695,7 +705,7 @@ def main():
                 time.sleep(CFG.poll_sec); continue
 
             # 3) 평단 대비 상승 → 전량 매도
-            if avg > 0 and price >= avg * (1 + rise_trig):
+            if avg > 0 and price >= avg * (1 + CFG.rise_pct):
                 if sell_all_market(coin_bal, price):
                     last_action_ts = time.time()
                 time.sleep(CFG.poll_sec); continue

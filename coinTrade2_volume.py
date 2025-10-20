@@ -17,10 +17,6 @@ import pyupbit
 
 from price_source import PriceStream
 
-# for 변동성(표준편차) volatility
-from collections import deque
-import statistics
-
 # ======================
 # 경로 상수
 # ======================
@@ -95,31 +91,61 @@ CFG = load_config()
 BANNER = load_banner()
 
 # ======================
-# 변동성(표준편차) 추적
+# 거래량 급증 필터
 # ======================
-class VolatilityGuard:
-    def __init__(self, window_sec: int = 300):
-        self.window_sec = max(30, window_sec)
-        self.buf = deque()
+class VolumeSpikeGuard:
+    def __init__(self, ticker: str, lookback=20, spike_mul=3.0, cooldown_sec=300):
+        self.ticker = ticker
+        self.lookback = max(5, lookback)
+        self.spike_mul = max(1.5, spike_mul)
+        self.cooldown_sec = max(60, cooldown_sec)
+        self.pause_until = 0.0
+        self._last_fetch_min = None
+        self._cache = None
     
-    def add(self, ts: float, price: float):
-        self.buf.append((ts, price))
-        while self.buf and ts - self.buf[0][0] > self.window_sec:
-            self.buf.popleft()
+    def _minute_floor(self, ts: float) -> int:
+        return int(ts // 60)
+    
+    def _fetch_once_per_minute(self) -> tuple:
+        """1분에 1회 REST 호출해 pyupbit.get_ohlcv('minute1')로 거래량 확인"""
+        now = time.time()
+        now_min = self._minute_floor(now)
+        if self._last_fetch_min == now_min and self._cache:
+            return self._cache
+        
+        import pandas as pd
+        try:
+            df = pyupbit.get_ohlcv(self.ticker, interval="minute1", count=max(self.lookback+2, 30))
+        except Exception as e:
+            log.warning(f"[VOLUME] OHLCV 조회 실패: {e}")
+            return None
+    
+        if df is None or len(df) < self.lookback + 1:
+            return None
 
-    def realized_vol_pct(self) -> float:
-        # 가격 수준이 다른 구간에서도 비교 가능하게 '수익률' 표준편차 사용
-        if len(self.buf) < 10:
-            return 0.0
-        rets = []
-        prev = None
-        for _, p in self.buf:
-            if prev and p > 0 and prev > 0:
-                rets.append((p/prev - 1.0) * 100.0)
-            prev = p
-        if len(rets) < 5:
-            return 0.0
-        return statistics.pstdev(rets) # % 단위
+        vols = df['volume'].astype(float).tolist()
+        avg_vol = sum(vols[-(self.lookback+1):-1]) / self.lookback
+        last_vol = float(vols[-1])
+
+        self._last_fetch_min = now_min
+        self._cache = (now_min, avg_vol, last_vol)
+        return self._cache
+    
+    def dumping_or_spike(self) -> bool:
+        """급락장이든 아니든 '거래량 급증'이면 매수 일시 중단."""
+        if time.time() < self.pause_until:
+            return True
+        data = self._fetch_once_per_minute()
+        if not data:
+            return False
+        _, avg_vol, last_vol = data
+        if avg_vol <= 0:
+            return False
+        if last_vol >= avg_vol * self.spike_mul:
+            self.pause_until = time.time() + self.cooldown_sec
+            log.warning(f"[VOLUME] 거래량 급증 감지({last_vol:.2f} / avg {avg_vol:.2f} -> 매수 {self.cooldown_sec}s 중단)")
+            return True
+        return False
 
 # ======================
 # 로깅
@@ -594,14 +620,13 @@ def main():
                 maybe_reload_config(CONFIG_FILE)
                 next_cfg_check_ts = now + 5.0
 
-            vol_cfg = (doc.get("volatility") or {})
-            VOL_ENABLED = bool(vol_cfg.get("enabled"), False)
-            VOL_WINDOW = int(vol_cfg.get("window_sec", 300))
-            VOL_REF_PCT = float(vol_cfg.get("ref_vol_pct"), 0.5)
-            VOL_MIN_SCALE = float(vol_cfg.get("min_scale", 0.6))
-            VOL_MAX_SCALE = float(vol_cfg.get("max_scale", 2.0))
+            v_cfg = (doc.get("volume_spike") or {})
+            VSP_ENABLED = bool(v_cfg.get("enabled", False))
+            VSP_LOOK = int(v_cfg.get("lookback", 20))
+            VSP_MUL = float(v_cfg.get("spike_multiplier", 3.0))
+            VSP_CD = int(v_cfg.get("cooldown_sec", 300))
 
-            vol_guard = VolatilityGuard(window_sec=VOL_WINDOW)
+            vsp = VolumeSpikeGuard(CFG.ticker, lookback=VSP_LOOK, spike_mul=VSP_MUL, cooldown_sec=VSP_CD)
 
             # (2) 가격: WS 우선, 멈추면 REST
             ps_price = ps.get_last(CFG.ticker)
@@ -609,8 +634,6 @@ def main():
                 price = get_rest_price(CFG.ticker)
             else:
                 price = ps_price
-
-            vol_guard.add(now, price)
 
             if not is_valid_price(price):
                 log.warning("[시세] 유요한 금액이 아님")
@@ -663,18 +686,9 @@ def main():
 
             with state_lock:
                 in_pos = state["in_position"]
-            
-            drop_trig = CFG.drop_pct
-            rise_trig = CFG.rise_pct
 
-            if VOL_ENABLED:
-                vol_pct = vol_guard.realized_vol_pct()
-                scale = 1.0
-                if VOL_REF_PCT > 0:
-                    scale = vol_pct / VOL_REF_PCT
-                scale = max(VOL_MIN_SCALE, min(VOL_MAX_SCALE, scale))
-                drop_trig = CFG.drop_pct * scale
-                rise_trig = CFG.rise_pct * scale
+            if VSP_ENABLED and vsp.dumping_or_spike():
+                time.sleep(CFG.poll_sec); continue
 
             # 1) 무포지션 → 초매수
             if not in_pos and coin_bal == 0:
@@ -686,7 +700,7 @@ def main():
                 time.sleep(CFG.poll_sec); continue
 
             # 2) 평단 대비 하락 → 추가매수
-            if avg > 0 and price <= avg * (1 - drop_trig):
+            if avg > 0 and price <= avg * (1 - CFG.drop_pct):
                 if not can_buy_now():
                     time.sleep(CFG.poll_sec); continue
                 if buy_unit_krw_with_available(unit_krw, krw, price):
@@ -695,7 +709,7 @@ def main():
                 time.sleep(CFG.poll_sec); continue
 
             # 3) 평단 대비 상승 → 전량 매도
-            if avg > 0 and price >= avg * (1 + rise_trig):
+            if avg > 0 and price >= avg * (1 + CFG.rise_pct):
                 if sell_all_market(coin_bal, price):
                     last_action_ts = time.time()
                 time.sleep(CFG.poll_sec); continue
