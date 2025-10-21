@@ -1,109 +1,111 @@
 #!/bin/bash
 # ============================
-# coinTrade 자동 실행 스크립트
+# coinTrade 자동 실행 스크립트 (무로그 + 무PID)
 # ============================
 
 VENV_PATH="/home/kw/coinTrade/venv"
 PYTHON_BIN="${VENV_PATH}/bin/python"
-SCRIPT="coinTrade2.py"
-LOG_DIR="/home/kw/coinTrade/logs_sh"
+SCRIPT_PATH="/home/kw/coinTrade/src/"
+SCRIPT_NAME="coinTrade2.py"
+SCRIPT_FULL="${SCRIPT_PATH}${SCRIPT_NAME}"
 
 MODES=("basic" "volatility" "rsi" "volume")
 
-source ${VENV_PATH}/bin/activate
+source "${VENV_PATH}/bin/activate" 2>/dev/null
 
-mkdir -p "$LOG_DIR"
+is_valid_mode() {
+  local target="$1"
+  for m in "${MODES[@]}"; do
+    [ "$m" = "$target" ] && return 0
+  done
+  return 1
+}
 
 start_bot() {
-    MODE=$1
-    LOG_FILE=${LOG_DIR}/run_{MODE}.log
+  local MODE="$1"
+  if ! is_valid_mode "$MODE"; then
+    echo "알 수 없는 모드: $MODE"; return 1
+  fi
 
-    echo "${MODE} 모드 시작.."
-    nohup $PYTHON_BIN "$SCRIPT" --mode "$MODE" > "$LOG_FILE" 2>&1 &
-    PID=$!
-    echo $PID > "${LOG_DIR}/${MODE}.pid"
-    echo "${MODE} 실행 중 (PID: $PID)"
+  # 이미 같은 모드 실행 중인지 확인
+  local pid
+  pid=$(pgrep -f "${SCRIPT_FULL} --mode ${MODE}")
+  if [ -n "$pid" ]; then
+    echo "${MODE} 이미 실행 중 (PID: $pid)"
+    return 0
+  fi
+
+  echo "${MODE} 모드 시작"
+  nohup "$PYTHON_BIN" "$SCRIPT_FULL" --mode "$MODE" >/dev/null 2>&1 &
+  echo "${MODE} 실행 중 (PID: $!)"
 }
 
 stop_bot() {
-    MODE=$1
-    PID_FILE="${LOG_DIR}/${MODE}.pid"
+  local MODE="$1"
+  if ! is_valid_mode "$MODE"; then
+    echo "알 수 없는 모드: $MODE"; return 1
+  fi
 
-    if [ ! -f "$PID_FILE" ]; then
-        echo "${MODE} PID 파일 없음 (중지 상태)"
-        return
-    fi
+  local pids
+  pids=$(pgrep -f "${SCRIPT_FULL} --mode ${MODE}")
+  if [ -z "$pids" ]; then
+    echo "${MODE} 실행 중 아님"
+    return 0
+  fi
 
-    PID=$(cat "$PID_FILE")
-    if ps -p $PID > /dev/null 2>&1; then
-        echo "${MODE} 종료 중 (PID: $PID)..."
-        kill $PID
-        sleep 1
-        if ps -p $PID > /dev/null 2>&1; then
-            echo "강제 종료 시도"
-            kill -9 $PID
-        fi
-    else
-        echo "${MODE} PID(${PID}) 프로세스가 이미 종료됨"
-    fi
-
-    rm -f "$PID_FILE"
-    echo "${MODE} 종료 완료"
+  echo "${MODE} 종료 중..."
+  pkill -f "${SCRIPT_FULL} --mode ${MODE}"
+  sleep 1
+  echo "${MODE} 종료 완료"
 }
 
 status_bot() {
-    MODE=$1
-    PID_FILE="${LOG_DIR}/${MODE}.pid"
-    if [ -f "$PID_FILE" ]; then
-        PID=$(cat "$PID_FILE")
-        if ps -p $PID > /dev/null 2>&1; then
-            echo "${MODE} 실행 중 (PID: $PID)"
-        else
-            echo "${MODE} 프로세스 없음 (PID 파일만 존재)"
-        fi
-    else
-        echo "${MODE} 중지됨"
-    fi
+  local MODE="$1"
+  if ! is_valid_mode "$MODE"; then
+    echo "알 수 없는 모드: $MODE"; return 1
+  fi
+
+  local pid
+  pid=$(pgrep -f "${SCRIPT_FULL} --mode ${MODE}")
+  if [ -n "$pid" ]; then
+    echo "${MODE} 실행 중 (PID: $pid)"
+  else
+    echo "${MODE} 중지됨"
+  fi
 }
 
 usage() {
-    MODES_STR=$(IFS=,; echo "${MODES[*]}")
-    echo "사용법:"
-    echo "  $0 start [mode]     - 해당 모드 시작 (${MODES_STR})"
-    echo "  $0 stop [mode]      - 해당 모드 종료"
-    echo "  $0 status [mode]    - 해당 모드 상태 확인"
-    echo "  $0 stop all         - 모든 모드 종료"
+  local MODES_STR
+  MODES_STR=$(IFS=,; echo "${MODES[*]}")
+  echo "사용법:"
+  echo "  $0 start [mode|all]  - 모드 시작 (${MODES_STR})"
+  echo "  $0 stop [mode|all]   - 모드 종료"
+  echo "  $0 status [mode]     - 상태 확인"
 }
 
 case "$1" in
-    start)
-        if [ "$2" = "all" ]; then
-            for m in "${MODES[@]}"; do
-                start_bot "$m"
-            done
-        else
-            start_bot "$2"
-        fi
-        ;;
-    stop)
-        if [ "$2" = "all" ]; then
-            for m in "${MODES[@]}"; do
-                stop_bot "$m"
-            done
-        else
-            stop_bot "$2"
-        fi
-        ;;
-    status)
-        if [ -z "$2" ]; then
-            for m in "${MODES[@]}"; do
-                status_bot "$m"
-            done
-        else
-            status_bot "$2"
-        fi
-        ;;
-    *)
+  start)
+    if [ "$2" = "all" ]; then
+      for m in "${MODES[@]}"; do start_bot "$m"; done
+    else
+      start_bot "$2"
+    fi
+    ;;
+  stop)
+    if [ "$2" = "all" ]; then
+      for m in "${MODES[@]}"; do stop_bot "$m"; done
+    else
+      stop_bot "$2"
+    fi
+    ;;
+  status)
+    if [ -n "$2" ]; then
+      status_bot "$2"
+    else
+      for m in "${MODES[@]}"; do status_bot "$m"; done
+    fi
+    ;;
+  *)
     usage
     ;;
 esac

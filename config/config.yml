@@ -22,6 +22,22 @@ fear_greed:
   notify_on_start: true     # 시작 즉시 1회 알림을 보낼지
   log_file: "fg_index.log"  # 로그 파일명 (trade.log_dir 폴더 안에 생성)
 
+notify:
+  # 우선순위 지정 (옵션): discord | kakao | both
+  use: "discord"
+  discord:
+    enabled: true
+    username: "CoinTrade Bot"     # 선택
+    avatar_url: ""                # 선택 (이미지 URL)
+    webhooks:
+      basic: "https://discord.com/api/webhooks/1430091791960641571/66XSym0-6ftoMdc9x9EvVA3JUsvzmOZAJyJaa3rBKmbHcgFnoUl9dnKiDL0pUH2fTAmZ"
+      volatility: "https://discord.com/api/webhooks/1430091200517636217/oEBsYJcpmVUNKpkVtKxuOVFK5Ka-O5hFLKHY46l_IvqGVfT7RZQtiQZyZDQu_EuL3BFX"
+      volume: "https://discord.com/api/webhooks/1430090910477320192/MdRqoOlNFzPFv9gg3HsJU5KRv4G1syl6b3NwHitihZH-DS7vX3UCKuXjfeyqkam5HEPk"
+      rsi: "https://discord.com/api/webhooks/1430089548066586685/X-YyYDZB4KP-RSo8d8Y-L8UiaOzgBpWFE9PYHiOI6e1sBsPAJZEnF-Rty45FShONR3vs"
+    default_webhook: ""           # (선택) 모드별 URL이 없을 때 사용할 기본 훅
+  kakao:
+    enabled: false  # 카카오를 백업/대체로 쓰려면 true
+
 upbit:
   rest_cooldown_sec: 600   # REST 호출 실패 시 다음 시도까지 대기 시간(초)
 

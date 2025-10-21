@@ -8,6 +8,8 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from collections import deque
 import statistics
+import requests
+import discord_notify
 
 import yaml
 from dotenv import load_dotenv
@@ -129,10 +131,10 @@ def parse_args():
     return p.parse_args()
 
 def pick_log_dir_by_mode(mode: str) -> str:
-    if mode == "volatility": return "log_volatility"
-    if mode == "volume":     return "log_volume"    # 요구사항 표기 유지
-    if mode == "rsi":        return "log_rsi"
-    return "log"  # basic
+    if mode == "volatility": return "volatility"
+    if mode == "volume":     return "volume"    # 요구사항 표기 유지
+    if mode == "rsi":        return "rsi"
+    return "basic"  # basic
 
 def _abspath_under_base(path: str) -> str:
     return path if os.path.isabs(path) else os.path.abspath(os.path.join(BASE_DIR, path))
@@ -293,7 +295,8 @@ def get_krw_and_coin_balance(cfg, upbit) -> Tuple[float, float, float]:
                 avg = float(b.get("avg_buy_price", 0) or 0)
         return krw, coin_bal, avg
 
-def buy_unit_krw_with_available(cfg, upbit, unit_krw: float, available_krw: float, price: float) -> bool:
+def buy_unit_krw_with_available(cfg, upbit, unit_krw: float, available_krw: float, 
+                                price: float, mode: str, doc: dict) -> bool:
     global sim_balance, state
     if not is_valid_price(price):
         log.warning("[TRADE] 매수 스킵: 유효하지 않은 가격 값 (price<=0)")
@@ -324,7 +327,7 @@ def buy_unit_krw_with_available(cfg, upbit, unit_krw: float, available_krw: floa
                f"→ 평단={sim_balance['avg']:,.0f}, "
                f"등락률={fmt_pct(price, sim_balance['avg'])}")
         log.info(msg); action_logger.info(msg)
-        send_kakao_text(msg)
+        notify(mode, msg, doc)
         return True
     else:
         r = upbit.buy_market_order(cfg.ticker, amt)
@@ -341,10 +344,10 @@ def buy_unit_krw_with_available(cfg, upbit, unit_krw: float, available_krw: floa
             write_json(STATE_FILE, state)
         msg = f"{STRAT_TAG} [{state['op_code'] or '-'}] 시장가 매수 {amt:,.0f} KRW → {'성공' if ok else '실패'} ({r})"
         log.info(msg); action_logger.info(msg)
-        send_kakao_text(msg)
+        notify(mode, msg, doc)
         return ok
 
-def sell_all_market(cfg, upbit, volume: float, price: float) -> bool:
+def sell_all_market(cfg, upbit, volume: float, price: float, mode: str, doc: dict) -> bool:
     global sim_balance, state
     if not is_valid_price(price):
         log.warning("[TRADE] 매도 스킵: 유효하지 않은 가격 (price<=0)")
@@ -372,7 +375,7 @@ def sell_all_market(cfg, upbit, volume: float, price: float) -> bool:
         msg = (f"{STRAT_TAG} [{closed_op or op}] [모의] 전량매도 {volume:.8f} coin @ {price:,.0f} → "
                f"잔고={sim_balance['KRW']:,.0f} (직전 등락률 {fmt_pct(price, prev_avg)})")
         log.info(msg); action_logger.info(msg)
-        send_kakao_text(msg)
+        notify(mode, msg, doc)
         return True
     else:
         r = upbit.sell_market_order(cfg.ticker, volume)
@@ -390,7 +393,7 @@ def sell_all_market(cfg, upbit, volume: float, price: float) -> bool:
             write_json(STATE_FILE, state)
         msg = f"{STRAT_TAG} [{closed_op or op}] 시장가 전량매도 {volume:.8f} → {'성공' if ok else '실패'} ({r})"
         log.info(msg); action_logger.info(msg)
-        send_kakao_text(msg)
+        notify(mode, msg, doc)
         return ok
 
 def calc_unit_krw_by_initial_balance(cfg, upbit) -> float:
@@ -443,12 +446,56 @@ def maybe_reload_config(cfg_ref: Config, logger_ref: logging.Logger, path: str =
         except Exception as e:
             logger_ref.exception(f"config.yml 리로드 실패: {e}")
 
+def notify(mode: str, text: str, doc: dict, *, title: Optional[str] = None):
+    """
+    알림 통합 엔트리:
+        1) Discord로 모드별 채널 전송 시도
+        2) 실패 시 기존 카카오로 백업
+    """
+    ncfg = (doc.get("notify") or {})
+    pref = str(ncfg.get("use", "")).lower()
+
+    discord_enabled = bool(((ncfg.get("discord") or {}).get("enabled", False)))
+    kakao_enabled   = bool(((ncfg.get("kakao")   or {}).get("enabled", False)))
+
+    def try_discord() -> bool:
+        if not discord_enabled:
+            return False
+        return discord_notify.send_discord(mode=mode, text=text, doc=doc, title=title)
+    
+    def try_kakao() -> bool:
+        if not kakao_enabled:
+            return False
+        try:
+            send_kakao_text(text)
+            return True
+        except Exception:
+            return False
+        
+    if pref == "discord":
+        if try_discord(): return
+        try_kakao(); return
+    
+    if pref == "kakao":
+        if try_kakao(): return
+        try_discord; return
+    
+    if pref == "both":
+        ok = try_discord()
+        ok2 = try_kakao()
+        return
+    
+    if discord_enabled:
+        if try_discord: return
+    if kakao_enabled:
+        try_kakao()    
+
 # ======================
 # 메인
 # ======================
-def main(mode: str):
-    global LOG_DIR, STATE_FILE, PAPER_STATE, state, sim_balance, logger, action_logger, log, REST_FAIL_UNTIL, STRAT_TAG
+def main(args):
     mode = args.mode
+    global LOG_DIR, STATE_FILE, PAPER_STATE, state, sim_balance, logger, action_logger, log, REST_FAIL_UNTIL, STRAT_TAG
 
     # 1) 설정 로드/배너
     CFG = load_config()
@@ -711,9 +758,9 @@ def main(mode: str):
                     )
                     log.info("[일일 요약 발송] 한국 시간 09:00")
                     try:
-                        send_kakao_text(msg)
+                        notify(mode, msg, doc, title="일일 요약")
                     except Exception as e:
-                        log.exception(f"카카오 일일 요약 전송 실패: {e}")
+                        log.exception(f"알림 전송 실패: {e}")
                     with state_lock:
                         state["last_daily_date"] = today_kst
                         write_json(STATE_FILE, state)
@@ -753,18 +800,18 @@ def main(mode: str):
             # 보조 유틸
             def try_first_buy():
                 if not can_buy_now(CFG): return False
-                if buy_unit_krw_with_available(CFG, upbit, unit_krw, krw, price):
+                if buy_unit_krw_with_available(CFG, upbit, unit_krw, krw, price, mode, doc):
                     record_buy_time()
                     return True
                 return False
             def try_add_buy():
                 if not can_buy_now(CFG): return False
-                if buy_unit_krw_with_available(CFG, upbit, unit_krw, krw, price):
+                if buy_unit_krw_with_available(CFG, upbit, unit_krw, krw, price, mode, doc):
                     record_buy_time()
                     return True
                 return False
             def try_sell_all():
-                return sell_all_market(CFG, upbit, coin_bal, price)
+                return sell_all_market(CFG, upbit, coin_bal, price, mode, doc)
 
             acted = False
 
@@ -835,4 +882,4 @@ def main(mode: str):
 
 if __name__ == "__main__":
     args = parse_args()
-    main(args.mode)
+    main(args)
