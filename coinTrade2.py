@@ -448,6 +448,7 @@ def maybe_reload_config(cfg_ref: Config, logger_ref: logging.Logger, path: str =
 # ======================
 def main(mode: str):
     global LOG_DIR, STATE_FILE, PAPER_STATE, state, sim_balance, logger, action_logger, log, REST_FAIL_UNTIL, STRAT_TAG
+    mode = args.mode
 
     # 1) 설정 로드/배너
     CFG = load_config()
@@ -568,6 +569,33 @@ def main(mode: str):
     for k, v in rows:
         log.info(f"{pad_label(k, label_width)} : {v}")
     log.info("=====================================================")
+
+    suppress_first_buy = False
+
+    # 실제 모드
+    if not CFG.paper_trade:
+        if coin0 > 0.0:
+            suppress_first_buy = True
+    
+    # 모의 모드
+    else:
+        if sim_balance.get("coin", 0.0) > 0.0:
+            suppress_first_buy = True
+        else:
+            ACCESS = os.getenv("UPBIT_ACCESS")
+            SECRET = os.getenv("UPBIT_SECRET")
+            if ACCESS and SECRET:
+                try:
+                    _tmp = pyupbit.Upbit(ACCESS, SECRET)
+                    _krwX, _coinX, _avgX = get_krw_and_coin_balance(CFG, _tmp)
+                    if _coinX > 0.0:
+                        suppress_first_buy = True
+                        log.info("[INFO] 실보유 코인 감지(실거래 계정) -> 초매수 X")
+                except Exception:
+                    pass
+    
+    if suppress_first_buy:
+        log.info("[INFO] 시작 시 보유 코인 감지 -> 첫 매수 비활성화")
 
     last_action_ts = 0.0
     next_log_ts = 0.0
@@ -741,7 +769,7 @@ def main(mode: str):
             acted = False
 
             if mode in ("basic", "volatility"):
-                if not in_pos and coin_bal == 0:
+                if not in_pos and coin_bal == 0 and not suppress_first_buy:
                     if try_first_buy():
                         last_action_ts = time.time(); acted = True
                 elif avg > 0 and price <= avg * (1 - drop_trig):
@@ -754,7 +782,7 @@ def main(mode: str):
             elif mode == "rsi":
                 if rsi_buf: rsi_buf.add(price)
                 rsi_val = rsi_buf.rsi() if rsi_buf else 50.0
-                if not in_pos and coin_bal == 0:
+                if not in_pos and coin_bal == 0 and not suppress_first_buy:
                     if rsi_val <= 30.0 and try_first_buy():
                         log.info(f"[RSI] RSI={rsi_val:.2f} → 초매수")
                         last_action_ts = time.time(); acted = True
@@ -770,7 +798,7 @@ def main(mode: str):
             elif mode == "volume":
                 vr = get_volume_ratio(CFG.ticker, count=30)
                 VR_TH = 1.5
-                if not in_pos and coin_bal == 0:
+                if not in_pos and coin_bal == 0 and not suppress_first_buy:
                     if vr >= VR_TH and try_first_buy():
                         log.info(f"[VOL] volume_ratio={vr:.2f} → 초매수")
                         last_action_ts = time.time(); acted = True
