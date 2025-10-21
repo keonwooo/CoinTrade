@@ -15,6 +15,7 @@ trade:
 
 fear_greed:
   enabled: true             # 사용 여부
+  run_in_modes: ["basic"]    # 카카오톡 1회 전송할 모드 선택
   mode: "daily"             # "daily" | "interval"
   daily_kst_hour: 9         # 한국시간 매일 9시
   interval_sec: 3600        # 조회 주기(초) - 1시간 = 3600

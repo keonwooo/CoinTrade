@@ -3,11 +3,13 @@
 # coinTrade 자동 실행 스크립트 (무로그 + 무PID)
 # ============================
 
-VENV_PATH="/home/kw/coinTrade/venv"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+VENV_PATH="${SCRIPT_DIR}/venv"
 PYTHON_BIN="${VENV_PATH}/bin/python"
-SCRIPT_PATH="/home/kw/coinTrade/src/"
+SCRIPT_PATH="${SCRIPT_DIR}/src"
 SCRIPT_NAME="coinTrade2.py"
-SCRIPT_FULL="${SCRIPT_PATH}${SCRIPT_NAME}"
+SCRIPT_FULL="${SCRIPT_PATH}/${SCRIPT_NAME}"
 
 MODES=("basic" "volatility" "rsi" "volume")
 
@@ -36,7 +38,7 @@ start_bot() {
   fi
 
   echo "${MODE} 모드 시작"
-  nohup "$PYTHON_BIN" "$SCRIPT_FULL" --mode "$MODE" >/dev/null 2>&1 &
+  nohup "$PYTHON_BIN" "$SCRIPT_FULL" --mode "$MODE" --logs-root "$SCRIPT_DIR" >/dev/null 2>&1 &
   echo "${MODE} 실행 중 (PID: $!)"
 }
 

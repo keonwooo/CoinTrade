@@ -123,6 +123,11 @@ def next_kst_0900(after: Optional[datetime] = None) -> datetime:
 def parse_args():
     p = argparse.ArgumentParser(description="Unified Upbit bot")
     p.add_argument(
+        "--logs-root",
+        default=None,
+        help="로그 루트 디렉토리(지정 시 logs/<mode> 하위에 기록). 미지정이면 코드 위치(BASE_DIR) 기준"
+    )
+    p.add_argument(
         "--mode",
         choices=["basic", "volatility", "volume", "rsi"],
         default="basic",
@@ -136,8 +141,8 @@ def pick_log_dir_by_mode(mode: str) -> str:
     if mode == "rsi":        return "rsi"
     return "basic"  # basic
 
-def _abspath_under_base(path: str) -> str:
-    return path if os.path.isabs(path) else os.path.abspath(os.path.join(BASE_DIR, path))
+def _abspath_under_base(logs_root: str, path: str) -> str:
+    return os.path.abspath(os.path.join(logs_root, "logs", path))
 
 # ======================
 # 변동성/RSI/볼륨 헬퍼
@@ -502,8 +507,9 @@ def main(args):
     BANNER = load_banner()
 
     # 2) 모드별 로그 디렉토리 확정
+    logs_root = args.logs_root or os.getenv("COINTRADE_LOGS_ROOT") or BASE_DIR
     mode_log_dir = pick_log_dir_by_mode(mode)
-    effective_log_dir = _abspath_under_base(mode_log_dir)
+    effective_log_dir = _abspath_under_base(logs_root, mode_log_dir)
     LOG_DIR = effective_log_dir
     STATE_FILE  = os.path.join(LOG_DIR, "state.json")
     PAPER_STATE = os.path.join(LOG_DIR, "paper_state.json")
@@ -660,7 +666,8 @@ def main(args):
         log.exception(f"config.yml 파싱 실패: {e}")
 
     fgi = (doc.get("fear_greed") or {})
-    FG_ENABLED = bool(fgi.get("enabled", False))
+    run_in_modes = set(fgi.get("run_in_modes") or ["basic"])
+    FG_ENABLED = bool(fgi.get("enabled", False)) and (mode in run_in_modes)
     FG_MODE = str(fgi.get("mode", "daily")).lower()
     FG_DAILY_HOUR = int(fgi.get("daily_kst_hour", 9))
     FG_INTERVAL = int(fgi.get("interval_sec", 3600))
