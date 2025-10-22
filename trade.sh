@@ -11,7 +11,7 @@ SCRIPT_PATH="${SCRIPT_DIR}/src"
 SCRIPT_NAME="coinTrade2.py"
 SCRIPT_FULL="${SCRIPT_PATH}/${SCRIPT_NAME}"
 
-MODES=("basic" "volatility" "rsi" "volume")
+MODES=("basic" "volatility" "rsi" "volume" "rsi_trend")
 
 source "${VENV_PATH}/bin/activate" 2>/dev/null
 

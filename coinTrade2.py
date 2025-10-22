@@ -1,4 +1,4 @@
-# coinTrade2.py — unified single-file bot (basic / volatility / volume / rsi)
+# coinTrade2.py — unified single-file bot (basic / volatility / volume / rsi / rsi_trend)
 
 from dataclasses import dataclass
 from typing import Tuple, Optional
@@ -129,16 +129,17 @@ def parse_args():
     )
     p.add_argument(
         "--mode",
-        choices=["basic", "volatility", "volume", "rsi"],
+        choices=["basic", "volatility", "volume", "rsi", "rsi_trend"],
         default="basic",
-        help="전략 선택 (basic | volatility | volume | rsi)"
+        help="전략 선택 (basic | volatility | volume | rsi | rsi_trend)"
     )
     return p.parse_args()
 
 def pick_log_dir_by_mode(mode: str) -> str:
     if mode == "volatility": return "volatility"
-    if mode == "volume":     return "volume"    # 요구사항 표기 유지
+    if mode == "volume":     return "volume"
     if mode == "rsi":        return "rsi"
+    if mode == "rsi_trend":  return "rsi_trend"
     return "basic"  # basic
 
 def _abspath_under_base(logs_root: str, path: str) -> str:
@@ -188,6 +189,47 @@ class RSIBuffer:
             return 50.0
         rs = (gains / self.period) / (losses / self.period if losses != 0 else 1e-9)
         return 100.0 - (100.0 / (1.0 + rs))
+
+class EMACalc:
+    """지수이동평균(EMA) 계산기. update(price)로 최신 ema 반환."""
+    def __init__(self, period: int):
+        self.period = max(1, int(period))
+        self.alpha = 2.0 / (self.period + 1.0)
+        self.ema: Optional[float] = None
+
+    def seed(self, prices: list[float]):
+        vals = [float(p) for p in prices if p and p > 0]
+        if not vals:
+            return
+        sma = sum(vals) / len(vals)
+        self.ema = sma
+    
+    def update(self, price: float) -> float:
+        if price is None or price <= 0:
+            return self.ema if self.ema is not None else 0.0
+        if self.ema is None:
+            self.ema = price
+        else:
+            self.ema = (price - self.ema) * self.alpha + self.ema
+        return self.ema
+
+class ReboundDetector:
+    """
+    반등 조건:
+    - 최근 lookback 구간에서 가격이 EMA_short 아래로 내려간 적이 있었고
+    - 지금은 가격 >= EMA_short 이며
+    - 단기 추세 우상향(EMA_short > EMA_long)
+    """
+    def __init__(self, lookback_ticks: int = 5):
+        self.look = max(1, int(lookback_ticks))
+        self.was_below_short = deque(maxlen=self.look)
+    
+    def update_and_check(self, price: float, ema_s: float, ema_l: float) -> bool:
+        below = (price > 0 and ema_s > 0 and price < ema_s)
+        self.was_below_short.append(below)
+        had_below = any(self.was_below_short)
+        rebound_now = (price >= ema_s) and (ema_s > ema_l) and had_below
+        return bool(rebound_now)
 
 def get_volume_ratio(ticker: str, count: int = 30) -> float:
     """1분봉 최근 avg 대비 최신봉 거래량 비율. 실패 시 1.0"""
@@ -702,6 +744,42 @@ def main(args):
         vol_guard = None
         VOL_REF_PCT = VOL_MIN_SCALE = VOL_MAX_SCALE = None
 
+    if mode == "rsi_trend":
+        trend_cfg = (doc.get("rsi_trend") or {})
+        TR_RSI_PERIOD   = int(trend_cfg.get("rsi_period", 14))
+        TR_RSI_BUY      = float(trend_cfg.get("rsi_buy", 32.0))
+        TR_RSI_SELL     = float(trend_cfg.get("rsi_sell", 65.0))
+        TR_EMA_SHORT    = int(trend_cfg.get("ema_short", 5))
+        TR_EMA_LONG     = int(trend_cfg.get("ema_long", 20))
+        TR_LOOKBACK     = int(trend_cfg.get("rebound_lookback", 5))
+        TR_SEED_INIT    = bool(trend_cfg.get("use_init_seed_ohlcv", True))
+        # RSI period 반영
+        rsi_buf = RSIBuffer(period=TR_RSI_PERIOD)
+
+        ema_s = EMACalc(TR_EMA_SHORT)
+        ema_l = EMACalc(TR_EMA_LONG)
+        rebound = ReboundDetector(lookback_ticks=TR_LOOKBACK)
+
+        # 초기 seed (1분봉 종가 기반)
+        if TR_SEED_INIT:
+            try:
+                _df = pyupbit.get_ohlcv(CFG.ticker, interval="minute1", count=max(TR_EMA_LONG*3, 60))
+                if _df is not None and len(_df) > 0:
+                    closes = [float(c) for c in _df["close"].tolist() if c and c > 0]
+                    if closes:
+                        # EMA 초기화는 SMA로 seed 후 최근부터 숫자 적용
+                        seed_len = min(len(closes), TR_EMA_LONG)
+                        ema_s.seed(closes[:seed_len])
+                        ema_l.seed(closes[:seed_len])
+                        for px in closes[seed_len:]:
+                            ema_s.update(px)
+                            ema_l.update(px)
+                        # rsi도 시도
+                        for px in closes[-(TR_RSI_PERIOD+2):]:
+                            rsi_buf.add(px)
+            except Exception as e:
+                log.warning(f"[rsi_trend] 초기 seed 실패: {e}")
+
     # 12) 매일 09:00 알림
     next_daily_ts = next_kst_0900().timestamp()
 
@@ -864,6 +942,52 @@ def main(args):
                     if vr >= VR_TH and try_sell_all():
                         log.info(f"[VOL] volume_ratio={vr:.2f} & 상승 트리거 → 전량매도")
                         last_action_ts = time.time(); acted = True
+            
+            elif mode == "rsi_trend":
+                # 보조지표 업데이트
+                if rsi_buf: rsi_buf.add(price)
+                # EMA 갱신 (이전 시드가 없으면 현재가로 시작)
+                try:
+                    ema_s_val = ema_s.update(price)
+                    ema_l_val = ema_l.update(price)
+                except NameError:
+                    ema_s_val = price
+                    ema_l_val = price
+
+                rsi_val = rsi_buf.rsi() if rsi_buf else 50.0
+
+                # 반등 시그널: 최근에 EMA_short 아래였다가, 지금 price>=EMA_short이고 (EMA_s > EMA_l)
+                try:
+                    is_rebound = rebound.update_and_check(price, ema_s_val, ema_l_val)  # type: ignore[name-defined]
+                except NameError:
+                    is_rebound = False
+
+                # === 매수 로직 ===
+                # 조건(권장): (1) RSI가 매수선 이하 (2) EMA_s > EMA_l (추세 우상향) (3) '반등' 발생
+                if not in_pos and coin_bal == 0 and not suppress_first_buy:
+                    if (rsi_val <= TR_RSI_BUY) and (ema_s_val > ema_l_val) and is_rebound:
+                        if try_first_buy():
+                            log.info(f"[RSI_TREND] RSI={rsi_val:.2f}, EMA5>{'%.0f'%ema_l_val} & 반등 감지 → 초매수")
+                            last_action_ts = time.time(); acted = True
+
+                # === 추가매수 로직 ===
+                # 평단 대비 하락 트리거 충족 + RSI가 낮은 구간 + 추세는 여전히 EMA_s > EMA_l 이고, 반등 신호
+                elif avg > 0 and price <= avg * (1 - drop_trig):
+                    if (rsi_val <= min(40.0, TR_RSI_BUY + 5.0)) and (ema_s_val > ema_l_val) and is_rebound:
+                        if try_add_buy():
+                            log.info(f"[RSI_TREND] 추가매수: RSI={rsi_val:.2f}, 반등 신호, price<=avg*(1-{drop_trig:.4f})")
+                            last_action_ts = time.time(); acted = True
+
+                # === 매도 로직 ===
+                # 기본 익절: (평단 대비 상승 트리거) AND (RSI가 매도선 이상 OR 단기추세 약화: EMA_s < EMA_l)
+                # 보조 익절: 추세 약화(EMA_s < EMA_l) & RSI가 중립이상(>=50)일 때도 방어적 청산 허용
+                elif avg > 0:
+                    take_profit = (price >= avg * (1 + rise_trig)) and ((rsi_val >= TR_RSI_SELL) or (ema_s_val < ema_l_val))
+                    defensive_exit = (ema_s_val < ema_l_val) and (rsi_val >= 50.0) and (price >= avg * 0.995)  # -0.5% 이내 손절 방어
+                    if take_profit or defensive_exit:
+                        if try_sell_all():
+                            log.info(f"[RSI_TREND] {'익절' if take_profit else '방어적 청산'}: RSI={rsi_val:.2f}, EMA_s{('<' if ema_s_val < ema_l_val else '>')}EMA_l")
+                            last_action_ts = time.time(); acted = True
 
             if acted:
                 time.sleep(CFG.poll_sec)

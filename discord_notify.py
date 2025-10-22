@@ -23,7 +23,7 @@ def send_discord(mode: str, text: str, doc: Optional[Dict] = None, *,
                 timeout: float = 5.0) -> bool:
     """
     모드별 채널(웹훅)으로 알림 전송
-    - mode: "basic" | "volatility" | "volume" | "rsi"
+    - mode: "basic" | "volatility" | "volume" | "rsi" | "rsi_trend"
     - text: 본문
     - doc: config.yml 파싱결과(dict). notify.discord.* 설정 사용
     - title: 임베드 제목(선택)

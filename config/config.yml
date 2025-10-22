@@ -8,7 +8,7 @@ trade:
   cooldown_sec: 20.0         # 주문 후 쿨다운(초)
   max_buys_per_hour: 3       # 1시간 내 최대 매수 횟수
   poll_sec: 1.0              # 내부 루프 주기(초) — 로그 빈도는 log_every_sec로 제어
-  log_every_sec: 5.0         # 5초마다 상태 로그 1회
+  log_every_sec: 3600.0         # 5초마다 상태 로그 1회
   paper_trade: true          # true=모의, false=실거래
   log_dir: "logs"            # 로그 폴더 (기본 /logs)
   ws_stale_fallback_sec: 3.0 # WS 수신 정지 시 REST로 대체 허용 지연(초)
@@ -35,6 +35,7 @@ notify:
       volatility: "https://discord.com/api/webhooks/1430091200517636217/oEBsYJcpmVUNKpkVtKxuOVFK5Ka-O5hFLKHY46l_IvqGVfT7RZQtiQZyZDQu_EuL3BFX"
       volume: "https://discord.com/api/webhooks/1430090910477320192/MdRqoOlNFzPFv9gg3HsJU5KRv4G1syl6b3NwHitihZH-DS7vX3UCKuXjfeyqkam5HEPk"
       rsi: "https://discord.com/api/webhooks/1430089548066586685/X-YyYDZB4KP-RSo8d8Y-L8UiaOzgBpWFE9PYHiOI6e1sBsPAJZEnF-Rty45FShONR3vs"
+      rsi_trend: "https://discord.com/api/webhooks/1430463255255453878/REsez91FdDXeG4BvH8qrMl1vdbAaNr0eUVC1u-zYP31krTXvF1iXaeT7uHYAT8Nmm1Y2"
     default_webhook: ""           # (선택) 모드별 URL이 없을 때 사용할 기본 훅
   kakao:
     enabled: false  # 카카오를 백업/대체로 쓰려면 true
@@ -64,3 +65,13 @@ rsi:
   period: 14                  # RSI 기간
   buy_below: 30.0             # RSI가 이 값 미만일 때만 추가매수 허용
   use_close_1m: true          # 1분봉 증가 기준으로 계산(ws price로 같이 계산도 가능)
+
+rsi_trend:
+  enbaled: true               
+  rsi_period: 14              # RSI 기간
+  rsi_buy: 32                 # 매수 고려 RSI 이하
+  rsi_sell: 65                # 익절 고려 RSI 이상
+  ema_short: 5                # 단기 EMA
+  ema_long: 20                # 장기 EMA
+  rebound_lookback: 5         # 최근 N틱 내 EMA_short 아래였는지 탐지
+  use_init_seed_ohlcv: true   # 시작 시 1분봉으로 EMA/RSI 시드
