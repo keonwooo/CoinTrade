@@ -68,7 +68,7 @@ rsi:
   use_close_1m: true          # 1분봉 증가 기준으로 계산(ws price로 같이 계산도 가능)
 
 rsi_trend:
-  enbaled: true               
+  enabled: true               
   rsi_period: 14              # RSI 기간
   rsi_buy: 32                 # 매수 고려 RSI 이하
   rsi_sell: 65                # 익절 고려 RSI 이상
@@ -76,3 +76,16 @@ rsi_trend:
   ema_long: 20                # 장기 EMA
   rebound_lookback: 5         # 최근 N틱 내 EMA_short 아래였는지 탐지
   use_init_seed_ohlcv: true   # 시작 시 1분봉으로 EMA/RSI 시드
+  unit_weights: [1, 1, 1, 1, 2, 2, 2, 3]   # 가중 분할 (합=13 → 시드 * (가중/13) 만큼 단계별 매수)
+  drop_ladder_pct:          # 단계형 드랍 트리거(평단 대비 하락폭) — 단계가 올라갈수록 더 깊은 하락에서만 추가매수
+    - 0.003   # -0.3%
+    - 0.006   # -0.6%
+    - 0.010   # -1.0%
+    - 0.015   # -1.5%
+    - 0.021   # -2.1%
+    - 0.028   # -2.8%
+    - 0.036   # -3.6%
+    - 0.045   # -4.5%
+  parts: 6                    # rsi_trend 전용 분할 수
+  drop_pct: 0.004             # rsi_trend 전용 드랍 오버라이드
+  rise_pct: 0.006             # rsi_trend 전용 라이즈 오버라이드

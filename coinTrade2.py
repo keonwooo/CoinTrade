@@ -395,6 +395,7 @@ def buy_unit_krw_with_available(cfg, upbit, unit_krw: float, available_krw: floa
             if not state["in_position"]:
                 state["op_code"] = new_op_code(cfg)
                 state["in_position"] = True
+                state["ladder_idx"] = 0
             state["entry_avg"] = sim_balance["avg"]
             state["last_action"] = "BUY"
             state["last_action_ts"] = time.time()
@@ -414,6 +415,7 @@ def buy_unit_krw_with_available(cfg, upbit, unit_krw: float, available_krw: floa
             if ok and not state["in_position"]:
                 state["op_code"] = new_op_code(cfg)
                 state["in_position"] = True
+                state["ladder_idx"] = 0
             if ok:
                 state["entry_avg"] = avg_after
             state["last_action"] = "BUY" if ok else "BUY_FAIL"
@@ -447,6 +449,7 @@ def sell_all_market(cfg, upbit, volume: float, price: float, mode: str, doc: dic
             state["last_action_ts"] = time.time()
             closed_op = state["op_code"]
             state["op_code"] = ""
+            state["ladder_idx"] = 0
             write_json(STATE_FILE, state)
         write_json(PAPER_STATE, sim_balance)
         msg = (f"{STRAT_TAG} [{closed_op or op}] [모의] 전량매도 {volume:.8f} coin @ {price:,.0f} → "
@@ -463,6 +466,7 @@ def sell_all_market(cfg, upbit, volume: float, price: float, mode: str, doc: dic
                 state["in_position"] = False
                 closed_op = state["op_code"]
                 state["op_code"] = ""
+                state["ladder_idx"] = 0
             else:
                 closed_op = state["op_code"]
             state["last_action"] = "SELL" if ok else "SELL_FAIL"
@@ -640,7 +644,9 @@ def main(args):
         "in_position": False,
         "entry_avg": 0.0,
         "last_action": "",
-        "last_action_ts": 0.0
+        "last_action_ts": 0.0,
+        "ladder_idx": 0,
+        "last_daily_date": ""
     })
     if CFG.paper_trade:
         paper_loaded = read_json(PAPER_STATE, None)
@@ -783,12 +789,31 @@ def main(args):
         TR_EMA_LONG     = int(trend_cfg.get("ema_long", 20))
         TR_LOOKBACK     = int(trend_cfg.get("rebound_lookback", 5))
         TR_SEED_INIT    = bool(trend_cfg.get("use_init_seed_ohlcv", True))
+        TR_PARTS        = int(trend_cfg.get("parts", CFG.parts))
+        TR_DROP_PCT     = float(trend_cfg.get("drop_pct", CFG.drop_pct))
+        TR_RISE_PCT     = float(trend_cfg.get("rise_pct", CFG.rise_pct))
+
         # RSI period 반영
         rsi_buf = RSIBuffer(period=TR_RSI_PERIOD)
 
         ema_s = EMACalc(TR_EMA_SHORT)
         ema_l = EMACalc(TR_EMA_LONG)
         rebound = ReboundDetector(lookback_ticks=TR_LOOKBACK)
+
+        # --- Weighted ladder config (선택) ---
+        TR_WEIGHTS = trend_cfg.get("unit_weights", None)
+        if TR_WEIGHTS and isinstance(TR_WEIGHTS, list) and len(TR_WEIGHTS) > 0:
+            UNIT_WEIGHTS = [max(0.0, float(w)) for w in TR_WEIGHTS]
+            WEIGHT_SUM = sum(UNIT_WEIGHTS) if sum(UNIT_WEIGHTS) > 0 else None
+        else:
+            UNIT_WEIGHTS = None
+            WEIGHT_SUM = None
+
+        TR_DROP_LADDER = trend_cfg.get("drop_ladder_pct", None)
+        if TR_DROP_LADDER and isinstance(TR_DROP_LADDER, list) and len(TR_DROP_LADDER) > 0:
+            DROP_LADDER = [max(0.0, float(p)) for p in TR_DROP_LADDER]
+        else:
+            DROP_LADDER = None
 
         # 초기 seed (1분봉 종가 기반)
         if TR_SEED_INIT:
@@ -919,12 +944,22 @@ def main(args):
 
             # 전략 공통 준비
             base_for_unit = CFG.seed_krw if CFG.paper_trade else max(krw, CFG.min_order_krw)
-            unit_krw = max(CFG.min_order_krw, math.floor(base_for_unit / CFG.parts))
+
+            if mode == "rsi_trend":
+                local_parts = TR_PARTS
+                local_drop = TR_DROP_PCT
+                local_rise = TR_RISE_PCT
+            else:
+                local_parts = CFG.parts
+                local_drop = CFG.drop_pct
+                local_rise = CFG.rise_pct
+
+            unit_krw = max(CFG.min_order_krw, math.floor(base_for_unit / local_parts))
             with state_lock:
                 in_pos = state["in_position"]
 
-            drop_trig = CFG.drop_pct
-            rise_trig = CFG.rise_pct
+            drop_trig = local_drop
+            rise_trig = local_rise
 
             # volatility 모드: 변동성 스케일링
             if mode == "volatility" and vol_guard:
@@ -949,6 +984,16 @@ def main(args):
                 return False
             def try_sell_all():
                 return sell_all_market(CFG, upbit, coin_bal, price, mode, doc)
+            def try_first_buy_amount(amount: float) -> bool:
+                if not can_buy_now(CFG): return False
+                if buy_unit_krw_with_available(CFG, upbit, amount, krw, price, mode, doc):
+                    record_buy_time(); return True
+                return False
+            def try_add_buy_amount(amount: float) -> bool:
+                if not can_buy_now(CFG): return False
+                if buy_unit_krw_with_available(CFG, upbit, amount, krw, price, mode, doc):
+                    record_buy_time(); return True
+                return False
 
             acted = False
 
@@ -998,7 +1043,7 @@ def main(args):
             elif mode == "rsi_trend":
                 # 보조지표 업데이트
                 if rsi_buf: rsi_buf.add(price)
-                # EMA 갱신 (이전 시드가 없으면 현재가로 시작)
+                # EMA 갱신
                 try:
                     ema_s_val = ema_s.update(price)
                     ema_l_val = ema_l.update(price)
@@ -1007,39 +1052,87 @@ def main(args):
                     ema_l_val = price
 
                 rsi_val = rsi_buf.rsi() if rsi_buf else 50.0
+                trend_up = (ema_s_val > ema_l_val)
 
-                # 반등 시그널: 최근에 EMA_short 아래였다가, 지금 price>=EMA_short이고 (EMA_s > EMA_l)
+                # 반등 시그널: 최근 short 아래였고, 지금 price>=short, 그리고 short>long
                 try:
                     is_rebound = rebound.update_and_check(price, ema_s_val, ema_l_val)  # type: ignore[name-defined]
                 except NameError:
                     is_rebound = False
 
-                # === 매수 로직 ===
-                # 조건(권장): (1) RSI가 매수선 이하 (2) EMA_s > EMA_l (추세 우상향) (3) '반등' 발생
+                # === 사다리 현재 단계 조회 ===
+                with state_lock:
+                    cur_idx = int(state.get("ladder_idx", 0))
+                    cur_in_pos = bool(state.get("in_position", False))
+
+                # === 단계별 단위금액 계산 ===
+                if UNIT_WEIGHTS and WEIGHT_SUM and WEIGHT_SUM > 0:
+                    idx_for_unit = 0 if (not cur_in_pos) else min(cur_idx, len(UNIT_WEIGHTS)-1)
+                    step_weight = UNIT_WEIGHTS[idx_for_unit]
+                    step_unit_krw = max(CFG.min_order_krw, math.floor((base_for_unit * step_weight) / WEIGHT_SUM))
+                else:
+                    # 가중치 미설정 → 기존 균등 분할
+                    step_unit_krw = max(CFG.min_order_krw, math.floor(base_for_unit / local_parts))
+
+                # === 단계별 드랍 트리거 ===
+                if DROP_LADDER:
+                    idx_for_drop = min(cur_idx, len(DROP_LADDER)-1)
+                    drop_trig_local = DROP_LADDER[idx_for_drop]
+                else:
+                    drop_trig_local = drop_trig  # 기존 값 사용
+
+                acted_local = False
+
+                # === 최초 진입 ===
                 if not in_pos and coin_bal == 0 and not suppress_first_buy:
-                    if (rsi_val <= TR_RSI_BUY) and (ema_s_val > ema_l_val) and is_rebound:
-                        if try_first_buy():
-                            log.info(f"[RSI_TREND] RSI={rsi_val:.2f}, EMA5>{'%.0f'%ema_l_val} & 반등 감지 → 초매수")
-                            last_action_ts = time.time(); acted = True
+                    if (rsi_val <= TR_RSI_BUY) and trend_up and is_rebound:
+                        if try_first_buy_amount(step_unit_krw):
+                            with state_lock:
+                                state["ladder_idx"] = 0   # 초매수 이후 다음 추가는 0단계 기준부터 시작
+                                write_json(STATE_FILE, state)
+                            log.info(f"[RSI_TREND] 초매수: RSI={rsi_val:.2f}, unit={step_unit_krw:,.0f} KRW, idx=0")
+                            last_action_ts = time.time(); acted_local = True
 
-                # === 추가매수 로직 ===
-                # 평단 대비 하락 트리거 충족 + RSI가 낮은 구간 + 추세는 여전히 EMA_s > EMA_l 이고, 반등 신호
-                elif avg > 0 and price <= avg * (1 - drop_trig):
-                    if (rsi_val <= min(40.0, TR_RSI_BUY + 5.0)) and (ema_s_val > ema_l_val) and is_rebound:
-                        if try_add_buy():
-                            log.info(f"[RSI_TREND] 추가매수: RSI={rsi_val:.2f}, 반등 신호, price<=avg*(1-{drop_trig:.4f})")
-                            last_action_ts = time.time(); acted = True
+                # === 추가매수 ===
+                elif avg > 0 and price <= avg * (1 - drop_trig_local):
+                    if (rsi_val <= min(40.0, TR_RSI_BUY + 5.0)) and trend_up and is_rebound:
+                        # 다음 체결 금액(현 단계 기준)
+                        if UNIT_WEIGHTS and WEIGHT_SUM:
+                            idx_for_unit = min(cur_idx, len(UNIT_WEIGHTS)-1)
+                            step_weight = UNIT_WEIGHTS[idx_for_unit]
+                            step_unit_krw = max(CFG.min_order_krw, math.floor((base_for_unit * step_weight) / WEIGHT_SUM))
+                        else:
+                            step_unit_krw = max(CFG.min_order_krw, math.floor(base_for_unit / local_parts))
 
-                # === 매도 로직 ===
-                # 기본 익절: (평단 대비 상승 트리거) AND (RSI가 매도선 이상 OR 단기추세 약화: EMA_s < EMA_l)
-                # 보조 익절: 추세 약화(EMA_s < EMA_l) & RSI가 중립이상(>=50)일 때도 방어적 청산 허용
+                        if try_add_buy_amount(step_unit_krw):
+                            with state_lock:
+                                # 성공 시 단계 +1 (최대 길이-1까지만)
+                                max_len = max(
+                                    len(UNIT_WEIGHTS) if UNIT_WEIGHTS else 0,
+                                    len(DROP_LADDER)  if DROP_LADDER  else 0
+                                )
+                                if max_len <= 0:
+                                    state["ladder_idx"] = cur_idx + 1
+                                else:
+                                    state["ladder_idx"] = min(cur_idx + 1, max_len - 1)
+                                new_idx = state["ladder_idx"]
+                                write_json(STATE_FILE, state)
+                            log.info(f"[RSI_TREND] 추가매수: RSI={rsi_val:.2f}, unit={step_unit_krw:,.0f} KRW, idx->{new_idx}")
+                            last_action_ts = time.time(); acted_local = True
+
+                # === 매도(익절/방어) ===
                 elif avg > 0:
                     take_profit = (price >= avg * (1 + rise_trig)) and ((rsi_val >= TR_RSI_SELL) or (ema_s_val < ema_l_val))
-                    defensive_exit = (ema_s_val < ema_l_val) and (rsi_val >= 50.0) and (price >= avg * 0.995)  # -0.5% 이내 손절 방어
+                    defensive_exit = (ema_s_val < ema_l_val) and (rsi_val >= 50.0) and (price >= avg * 0.995)
                     if take_profit or defensive_exit:
                         if try_sell_all():
-                            log.info(f"[RSI_TREND] {'익절' if take_profit else '방어적 청산'}: RSI={rsi_val:.2f}, EMA_s{('<' if ema_s_val < ema_l_val else '>')}EMA_l")
-                            last_action_ts = time.time(); acted = True
+                            # sell_all_market에서 ladder_idx=0으로 이미 리셋됨
+                            log.info(f"[RSI_TREND] {'익절' if take_profit else '방어'} 청산. idx reset")
+                            last_action_ts = time.time(); acted_local = True
+
+                if acted_local:
+                    time.sleep(CFG.poll_sec)
+                    continue
 
             if acted:
                 time.sleep(CFG.poll_sec)
