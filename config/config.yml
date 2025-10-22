@@ -8,7 +8,8 @@ trade:
   cooldown_sec: 20.0         # 주문 후 쿨다운(초)
   max_buys_per_hour: 3       # 1시간 내 최대 매수 횟수
   poll_sec: 1.0              # 내부 루프 주기(초) — 로그 빈도는 log_every_sec로 제어
-  log_every_sec: 3600.0         # 5초마다 상태 로그 1회
+  log_every_sec: 3600.0      # 5초마다 상태 로그 1회
+  cron_log: "0 0 * * * *"    # 상태 로그 (매 시간)
   paper_trade: true          # true=모의, false=실거래
   log_dir: "logs"            # 로그 폴더 (기본 /logs)
   ws_stale_fallback_sec: 3.0 # WS 수신 정지 시 REST로 대체 허용 지연(초)

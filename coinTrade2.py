@@ -69,6 +69,7 @@ class Config:
     paper_trade: bool
     log_dir: str
     ws_stale_fallback_sec: float
+    cron_log: Optional[str] = None
 
 def load_config(path: str = CONFIG_FILE) -> Config:
     with open(path, "r", encoding="utf-8") as f:
@@ -94,6 +95,7 @@ def load_config(path: str = CONFIG_FILE) -> Config:
         max_buys_per_hour=int(t.get("max_buys_per_hour", 3)),
         poll_sec=float(t.get("poll_sec", 1.0)),
         log_every_sec=float(t.get("log_every_sec", 5.0)),
+        cron_log=t.get("cron_log", None),
         paper_trade=bool(t.get("paper_trade", True)),
         log_dir=t.get("log_dir", LOG_DIR),
         ws_stale_fallback_sec=float(t.get("ws_stale_fallback_sec", 3.0)),
@@ -267,6 +269,34 @@ def fmt_pct(price: float, avg: float) -> str:
     if avg and avg > 0:
         return f"{(price/avg - 1)*100:+.2f}%"
     return "-"
+
+def is_cron_match(cron_expr: str, dt: datetime) -> bool:
+    """
+    단순 크론식 매칭: "0 0 * * * *" (초 분 시 일 월 요일)
+    매칭되면 True 반환.
+    """
+    parts = cron_expr.strip().split()
+    if len(parts) != 6:
+        return False
+    
+    sec, minute, hour, day, month, weekday = parts
+
+    def match(field, value):
+        if field == "*":
+            return True
+        try:
+            return int(field) == value
+        except ValueError:
+            return False
+    
+    return (
+        match(sec, dt.second)
+        and match(minute, dt.minute)
+        and match(hour, dt.hour)
+        and match(day, dt.day)
+        and match(month, dt.month)
+        and match(weekday, dt.weekday())
+    )
 
 def get_rest_price(ticker: str) -> float:
     global REST_FAIL_UNTIL
@@ -525,7 +555,7 @@ def notify(mode: str, text: str, doc: dict, *, title: Optional[str] = None):
     
     if pref == "kakao":
         if try_kakao(): return
-        try_discord; return
+        try_discord(); return
     
     if pref == "both":
         ok = try_discord()
@@ -533,7 +563,7 @@ def notify(mode: str, text: str, doc: dict, *, title: Optional[str] = None):
         return
     
     if discord_enabled:
-        if try_discord: return
+        if try_discord(): return
     if kakao_enabled:
         try_kakao()    
 
@@ -851,15 +881,37 @@ def main(args):
                         write_json(STATE_FILE, state)
                 next_daily_ts = next_kst_0900().timestamp()
 
-            # 상태 로그
-            if now >= next_log_ts:
+            # 상태 로그 (cron_log or N초 단위)
+            now_dt = datetime.fromtimestamp(now, tz=KST)
+
+            should_log = False
+
+            if CFG.cron_log:
+                if is_cron_match(CFG.cron_log, now_dt) and now >= next_log_ts:
+                    should_log = True
+
+            else:
+                if now >= next_log_ts:
+                    should_log = True
+            
+            if should_log:
                 with state_lock:
                     op = state["op_code"] or "-"
+                    krw_str = fmt_krw(krw)
                 if avg > 0:
                     pl_str = fmt_pct(price, avg)
-                    krw_str = fmt_krw(krw)
                     log.info(f"[{op}] 가격={price:,.0f} | 평단={avg:,.0f} | 등락률={pl_str} | 잔고={krw_str}")
-                next_log_ts = now + CFG.log_every_sec
+                else:
+                    log.info(f"[{op}] 가격={price:,.0f} | 평단=- | 등락률=- | 잔고={krw_str}")
+                    
+                # rsi_trend 보조지표 출력
+                if mode == "rsi_trend":
+                    try:
+                        log.info(f"[RSI_TREND] RSI={rsi_buf.rsi():.2f}  EMA5≈{ema_s_val:.1f}  EMA20≈{ema_l_val:.1f}")
+                    except Exception:
+                        pass
+                    
+                next_log_ts = now + 1.0 if CFG.cron_log else now + CFG.log_every_sec
 
             # 쿨다운
             if now - last_action_ts < CFG.cooldown_sec:
