@@ -5,8 +5,8 @@ trade:
   drop_pct: 0.01             # 평단 대비 하락 추가매수(1%)
   rise_pct: 0.03             # 평단 대비 상승 전량매도(3%)
   min_order_krw: 5000        # 업비트 최소 주문액
-  cooldown_sec: 20.0         # 주문 후 쿨다운(초)
-  max_buys_per_hour: 3       # 1시간 내 최대 매수 횟수
+  cooldown_sec: 10.0         # 주문 후 쿨다운(초)
+  max_buys_per_hour: 5       # 1시간 내 최대 매수 횟수
   poll_sec: 1.0              # 내부 루프 주기(초) — 로그 빈도는 log_every_sec로 제어
   log_every_sec: 3600.0      # 5초마다 상태 로그 1회
   cron_log: "0 0 * * * *"    # 상태 로그 (매 시간)
@@ -70,22 +70,22 @@ rsi:
 rsi_trend:
   enabled: true               
   rsi_period: 14              # RSI 기간
-  rsi_buy: 32                 # 매수 고려 RSI 이하
+  rsi_buy: 45                 # 매수 고려 RSI 이하
   rsi_sell: 65                # 익절 고려 RSI 이상
-  ema_short: 5                # 단기 EMA
+  ema_short: 7                # 단기 EMA
   ema_long: 20                # 장기 EMA
-  rebound_lookback: 5         # 최근 N틱 내 EMA_short 아래였는지 탐지
+  rebound_lookback: 10        # 최근 N틱 내 EMA_short 아래였는지 탐지
   use_init_seed_ohlcv: true   # 시작 시 1분봉으로 EMA/RSI 시드
-  unit_weights: [1, 1, 1, 1, 2, 2, 2, 3]   # 가중 분할 (합=13 → 시드 * (가중/13) 만큼 단계별 매수)
+  unit_weights: [1, 1, 1.5, 1.5, 2, 2, 2.5, 3]   # 가중 분할 (합=13 → 시드 * (가중/13) 만큼 단계별 매수)
   drop_ladder_pct:          # 단계형 드랍 트리거(평단 대비 하락폭) — 단계가 올라갈수록 더 깊은 하락에서만 추가매수
-    - 0.003   # -0.3%
-    - 0.006   # -0.6%
-    - 0.010   # -1.0%
-    - 0.015   # -1.5%
-    - 0.021   # -2.1%
-    - 0.028   # -2.8%
-    - 0.036   # -3.6%
-    - 0.045   # -4.5%
+    - 0.005  # -0.5%
+    - 0.010  # -1.0%
+    - 0.017  # -1.7%
+    - 0.025  # -2.5%
+    - 0.035  # -3.5%
+    - 0.046  # -4.6%
+    - 0.058  # -5.8%
+    - 0.071  # -7.1%
   parts: 6                    # rsi_trend 전용 분할 수
-  drop_pct: 0.004             # rsi_trend 전용 드랍 오버라이드
-  rise_pct: 0.006             # rsi_trend 전용 라이즈 오버라이드
+  drop_pct: 0.008             # rsi_trend 전용 드랍 오버라이드
+  rise_pct: 0.015             # rsi_trend 전용 라이즈 오버라이드
