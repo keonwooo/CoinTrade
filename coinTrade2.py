@@ -1006,6 +1006,7 @@ def main(args):
                         last_action_ts = time.time(); acted = True
                 elif avg > 0 and price >= avg * (1 + rise_trig):
                     if try_sell_all():
+                        suppress_first_buy = False
                         last_action_ts = time.time(); acted = True
 
             elif mode == "rsi":
@@ -1022,6 +1023,7 @@ def main(args):
                 elif avg > 0 and price >= avg * (1 + rise_trig):
                     if rsi_val >= 65.0 and try_sell_all():
                         log.info(f"[RSI] RSI={rsi_val:.2f} & 상승 트리거 → 전량매도")
+                        suppress_first_buy = False
                         last_action_ts = time.time(); acted = True
 
             elif mode == "volume":
@@ -1038,6 +1040,7 @@ def main(args):
                 elif avg > 0 and price >= avg * (1 + rise_trig):
                     if vr >= VR_TH and try_sell_all():
                         log.info(f"[VOL] volume_ratio={vr:.2f} & 상승 트리거 → 전량매도")
+                        suppress_first_buy = False
                         last_action_ts = time.time(); acted = True
             
             elif mode == "rsi_trend":
@@ -1128,6 +1131,7 @@ def main(args):
                         if try_sell_all():
                             # sell_all_market에서 ladder_idx=0으로 이미 리셋됨
                             log.info(f"[RSI_TREND] {'익절' if take_profit else '방어'} 청산. idx reset")
+                            suppress_first_buy = False
                             last_action_ts = time.time(); acted_local = True
 
                 if acted_local:
