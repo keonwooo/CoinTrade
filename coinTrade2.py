@@ -792,6 +792,13 @@ def main(args):
         TR_PARTS        = int(trend_cfg.get("parts", CFG.parts))
         TR_DROP_PCT     = float(trend_cfg.get("drop_pct", CFG.drop_pct))
         TR_RISE_PCT     = float(trend_cfg.get("rise_pct", CFG.rise_pct))
+        TR_MIN_HOLD   = int(trend_cfg.get("min_hold_sec", 180))
+        TR_HARD_STOP  = float(trend_cfg.get("hard_stop_pct", 0.010))
+        TR_TRAIL_STOP = float(trend_cfg.get("trail_stop_pct", 0.008))
+        TR_TREND_SUST = int(trend_cfg.get("trend_down_sustain_sec", 25))
+
+        # 루프 밖에서 추세 지속 체크용 타임스탬프
+        trend_down_since = 0.0
 
         # RSI period 반영
         rsi_buf = RSIBuffer(period=TR_RSI_PERIOD)
@@ -1046,6 +1053,7 @@ def main(args):
             elif mode == "rsi_trend":
                 # 보조지표 업데이트
                 if rsi_buf: rsi_buf.add(price)
+
                 # EMA 갱신
                 try:
                     ema_s_val = ema_s.update(price)
@@ -1086,12 +1094,20 @@ def main(args):
 
                 acted_local = False
 
+                with state_lock:
+                        if state.get("in_position", False):
+                            cur_peak = float(state.get("peak_price", 0.0) or 0.0)
+                            if price > cur_peak:
+                                state["peak_price"] = float(price)
+
                 # === 최초 진입 ===
                 if not in_pos and coin_bal == 0 and not suppress_first_buy:
                     if (rsi_val <= TR_RSI_BUY) and trend_up and is_rebound:
                         if try_first_buy_amount(step_unit_krw):
                             with state_lock:
                                 state["ladder_idx"] = 0   # 초매수 이후 다음 추가는 0단계 기준부터 시작
+                                state["entry_ts"] = time.time()
+                                state["peak_price"] = float(price)
                                 write_json(STATE_FILE, state)
                             log.info(f"[RSI_TREND] 초매수: RSI={rsi_val:.2f}, unit={step_unit_krw:,.0f} KRW, idx=0")
                             last_action_ts = time.time(); acted_local = True
@@ -1119,20 +1135,65 @@ def main(args):
                                 else:
                                     state["ladder_idx"] = min(cur_idx + 1, max_len - 1)
                                 new_idx = state["ladder_idx"]
+                                prev_peak = float(state.get("peak_price", 0.0) or 0.0)
+                                state["peak_price"] = max(prev_peak, float(price))
                                 write_json(STATE_FILE, state)
                             log.info(f"[RSI_TREND] 추가매수: RSI={rsi_val:.2f}, unit={step_unit_krw:,.0f} KRW, idx->{new_idx}")
                             last_action_ts = time.time(); acted_local = True
 
                 # === 매도(익절/방어) ===
                 elif avg > 0:
-                    take_profit = (price >= avg * (1 + rise_trig)) and ((rsi_val >= TR_RSI_SELL) or (ema_s_val < ema_l_val))
-                    defensive_exit = (ema_s_val < ema_l_val) and (rsi_val >= 50.0) and (price >= avg * 0.995)
-                    if take_profit or defensive_exit:
+                    # === 지표/상태 ===
+                    with state_lock:
+                        entry_ts  = float(state.get("entry_ts", 0.0) or 0.0)
+                        peak_px   = float(state.get("peak_price", 0.0) or 0.0)
+                    held_sec = (time.time() - entry_ts) if entry_ts > 0 else 1e9
+                    profit   = (price / avg - 1.0)
+                    drawdown = ((peak_px - price) / peak_px) if (peak_px and peak_px > 0) else 0.0
+
+                    # === 하락 추세 '지속' 여부 ===
+                    if ema_s_val < ema_l_val:
+                        if trend_down_since == 0.0:
+                            trend_down_since = time.time()
+                    else:
+                        trend_down_since = 0.0
+                    trend_down_sustained = (trend_down_since > 0.0) and ((time.time() - trend_down_since) >= TR_TREND_SUST)
+
+                    # === 익절: 상승 모멘텀 유지 중에만 ===
+                    take_profit = (
+                        (price >= avg * (1 + rise_trig)) and
+                        (rsi_val >= TR_RSI_SELL) and
+                        (ema_s_val >= ema_l_val)
+                    )
+
+                    # === 방어: 최소 보유시간 이후에만 작동 ===
+                    hard_stop = (held_sec >= TR_MIN_HOLD) and (profit <= -TR_HARD_STOP)
+
+                    trailing_stop = (
+                        (held_sec >= TR_MIN_HOLD) and
+                        (profit > 0.0) and
+                        (drawdown >= TR_TRAIL_STOP) and
+                        trend_down_sustained
+                    )
+
+                    should_exit = take_profit or hard_stop or trailing_stop
+
+                    if should_exit:
                         if try_sell_all():
-                            # sell_all_market에서 ladder_idx=0으로 이미 리셋됨
-                            log.info(f"[RSI_TREND] {'익절' if take_profit else '방어'} 청산. idx reset")
+                            # 재진입 허용
                             suppress_first_buy = False
+                            # 상태 정리
+                            with state_lock:
+                                state["entry_ts"] = 0.0
+                                state["peak_price"] = 0.0
+                                write_json(STATE_FILE, state)
+                            log.info(
+                                f"[RSI_TREND] EXIT: "
+                                f"{'TP' if take_profit else ('HARD_STOP' if hard_stop else 'TRAIL_STOP')} | "
+                                f"held={held_sec:.0f}s profit={profit*100:.2f}% dd={drawdown*100:.2f}%"
+                            )
                             last_action_ts = time.time(); acted_local = True
+
 
                 if acted_local:
                     time.sleep(CFG.poll_sec)

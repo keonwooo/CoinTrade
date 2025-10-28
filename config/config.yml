@@ -89,3 +89,7 @@ rsi_trend:
   parts: 6                    # rsi_trend 전용 분할 수
   drop_pct: 0.008             # rsi_trend 전용 드랍 오버라이드
   rise_pct: 0.015             # rsi_trend 전용 라이즈 오버라이드
+  min_hold_sec: 180
+  hard_stop_pct: 0.010
+  trail_stop_pct: 0.008
+  trend_down_sustain_sec: 25
