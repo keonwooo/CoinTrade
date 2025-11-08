@@ -1,0 +1,9 @@
+# Runtime dependencies
+pyupbit
+PyYAML
+python-dotenv
+requests
+wcwidth
+
+# Ensure time zone data on Windows for zoneinfo
+tzdata; platform_system == "Windows"
