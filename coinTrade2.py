@@ -574,7 +574,7 @@ def notify(mode: str, text: str, doc: dict, *, title: Optional[str] = None):
 # ======================
 # 런처 (다중 모드 실행)
 # ======================
-def run_all_modes(logs_root: str | None):
+def run_all_modes(logs_root: Optional[str]):
     modes = ["basic", "volatility", "volume", "rsi", "rsi_trend"]
     procs = []
     script = os.path.abspath(__file__)
