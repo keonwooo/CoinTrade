@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 from typing import Tuple, Optional
-import os, math, time, json, uuid, logging, threading, argparse
+import os, math, time, json, uuid, logging, threading, argparse, sys, subprocess
 from logging.handlers import TimedRotatingFileHandler
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -572,10 +572,57 @@ def notify(mode: str, text: str, doc: dict, *, title: Optional[str] = None):
         try_kakao()    
 
 # ======================
+# 런처 (다중 모드 실행)
+# ======================
+def run_all_modes(logs_root: str | None):
+    modes = ["basic", "volatility", "volume", "rsi", "rsi_trend"]
+    procs = []
+    script = os.path.abspath(__file__)
+    for m in modes:
+        cmd = [sys.executable, script, "--mode", m]
+        if logs_root:
+            cmd += ["--logs-root", logs_root]
+        proc = subprocess.Popen(cmd)
+        procs.append((m, proc))
+        print(f"[LAUNCH] mode={m} pid={proc.pid}")
+
+    try:
+        while True:
+            alive = [p for _, p in procs if p.poll() is None]
+            if not alive:
+                break
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("[ALL] KeyboardInterrupt received, terminating child processes...")
+        for m, p in procs:
+            try:
+                p.terminate()
+                print(f"[ALL] terminate sent to {m} pid={p.pid}")
+            except Exception:
+                pass
+        time.sleep(2)
+        for m, p in procs:
+            if p.poll() is None:
+                try:
+                    p.kill()
+                    print(f"[ALL] kill sent to {m} pid={p.pid}")
+                except Exception:
+                    pass
+    finally:
+        for _, p in procs:
+            try:
+                p.wait(timeout=1)
+            except Exception:
+                pass
+
+# ======================
 # 메인
 # ======================
 def main(args):
     mode = args.mode
+    if mode == "all":
+        run_all_modes(args.logs_root)
+        return
     global LOG_DIR, STATE_FILE, PAPER_STATE, state, sim_balance, logger, action_logger, log, REST_FAIL_UNTIL, STRAT_TAG
 
     # 1) 설정 로드/배너
@@ -1223,4 +1270,7 @@ def main(args):
 
 if __name__ == "__main__":
     args = parse_args()
+    # If run without arguments, default to launching all modes
+    if len(sys.argv) == 1:
+        args.mode = "all"
     main(args)
